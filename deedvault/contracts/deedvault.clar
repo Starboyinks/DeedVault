@@ -12,6 +12,9 @@
 (define-constant err-insufficient-funds (err u106))
 (define-constant err-not-for-sale (err u107))
 (define-constant err-already-burned (err u108))
+(define-constant err-invalid-asset-type (err u109))
+(define-constant err-invalid-description (err u110))
+(define-constant err-invalid-uri (err u111))
 
 ;; Data Maps and Variables
 (define-map deeds
@@ -50,6 +53,31 @@
     )
 )
 
+(define-private (validate-string-not-empty (str (string-ascii 256)))
+    (not (is-eq (len str) u0))
+)
+
+(define-private (validate-asset-type (asset-type (string-ascii 64)))
+    (and 
+        (>= (len asset-type) u1)
+        (<= (len asset-type) u64)
+    )
+)
+
+(define-private (validate-description (description (string-ascii 256)))
+    (and 
+        (>= (len description) u1)
+        (<= (len description) u256)
+    )
+)
+
+(define-private (validate-uri (uri (string-ascii 256)))
+    (and 
+        (>= (len uri) u1)
+        (<= (len uri) u256)
+    )
+)
+
 (define-private (record-transfer (deed-id uint) (new-owner principal))
     (match (map-get? deeds deed-id)
         deed 
@@ -82,13 +110,17 @@
             (new-deed-id (+ (var-get last-deed-id) u1))
         )
         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        ;; Input validation
+        (asserts! (validate-asset-type asset-type) err-invalid-asset-type)
+        (asserts! (validate-description description) err-invalid-description)
+        (asserts! (validate-uri uri) err-invalid-uri)
         
         (map-set deeds new-deed-id
             {
                 owner: tx-sender,
-                asset-type: asset-type,
-                description: description,
-                uri: uri,
+                asset-type: (unwrap-panic (as-max-len? asset-type u64)),
+                description: (unwrap-panic (as-max-len? description u256)),
+                uri: (unwrap-panic (as-max-len? uri u256)),
                 creation-time: block-height,
                 last-modified: block-height,
                 is-locked: false,
@@ -171,18 +203,41 @@
     (let
         (
             (burned-deed (unwrap! (map-get? deeds burned-deed-id) err-token-not-found))
-            (new-deed-id (+ (var-get last-deed-id) u1))
         )
         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
         (asserts! (get is-burned burned-deed) err-invalid-token)
+        ;; Input validation
+        (asserts! (validate-asset-type asset-type) err-invalid-asset-type)
+        (asserts! (validate-description description) err-invalid-description)
+        (asserts! (validate-uri uri) err-invalid-uri)
         
         ;; Mint new deed
-        (try! (mint-deed asset-type description uri))
-        
-        ;; Record reissuance relationship
-        (map-set burned-to-reissued burned-deed-id new-deed-id)
-        
-        (ok new-deed-id)
+        (let
+            (
+                (new-deed-id (+ (var-get last-deed-id) u1))
+            )
+            (map-set deeds new-deed-id
+                {
+                    owner: tx-sender,
+                    asset-type: (unwrap-panic (as-max-len? asset-type u64)),
+                    description: (unwrap-panic (as-max-len? description u256)),
+                    uri: (unwrap-panic (as-max-len? uri u256)),
+                    creation-time: block-height,
+                    last-modified: block-height,
+                    is-locked: false,
+                    is-burned: false,
+                    price: none,
+                    for-sale: false,
+                    transfer-history: (list tx-sender)
+                }
+            )
+            (var-set last-deed-id new-deed-id)
+            
+            ;; Record reissuance relationship
+            (map-set burned-to-reissued burned-deed-id new-deed-id)
+            
+            (ok new-deed-id)
+        )
     )
 )
 
